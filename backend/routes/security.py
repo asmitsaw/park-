@@ -3,7 +3,11 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, session
 from backend.database import get_db, get_utc_now_iso, dict_from_row
 from backend.routes.auth import admin_required
-from backend.services.telegram_service import notify_security_event
+from backend.services.telegram_service import (
+    format_telegram_time,
+    notify_security_event,
+    send_telegram_message,
+)
 
 security_bp = Blueprint("security", __name__, url_prefix="/api/security")
 
@@ -109,8 +113,11 @@ def update_event(event_id):
 @security_bp.route("/telegram/test", methods=["POST"])
 @admin_required
 def telegram_test():
-    from backend.services.telegram_service import send_telegram_message
-    ok = send_telegram_message("🟢 PARK+ Telegram integration test. Your bot is connected.")
+    ok = send_telegram_message(
+        "<b>🟢 PARK+ TELEGRAM TEST</b>\n\n"
+        f"<b>Time:</b> {format_telegram_time(get_utc_now_iso())}\n"
+        "Your bot is connected."
+    )
     if not ok:
         return jsonify({"success": False, "error": "Telegram message failed. Check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in backend configuration."}), 503
     return jsonify({"success": True, "message": "Telegram test message sent."})

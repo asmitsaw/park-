@@ -15,6 +15,7 @@ The admin console is organized into three areas:
 
 - Session-based admin login and logout.
 - Customer, vehicle, RFID-card, subscription, parking-session, incident, ticket, and device management.
+- Permanent customer deletion with confirmation, including linked parking and subscription records; deletion is blocked while a vehicle is actively parked or has a pending gate entry.
 - Two seeded parking slots, P01 and P02.
 - RFID entry/exit authorization, IR-detected slot assignment, and subscription-time accounting.
 - Admin-initiated RFID reader capture: request a scan, present a tag to the ESP32 RC522 reader, and have the UID filled into the card form automatically.
@@ -131,7 +132,9 @@ At minimum, edit `esp32\ParkPlus_ESP32.ino`:
 - Set `SERVER_BASE_URL` to the host computer's LAN address, for example `http://192.168.1.25:5000`; do not use `localhost`.
 - Set `DEVICE_SECRET` to the same value as `DEVICE_SHARED_SECRET` in `backend\.env`.
 
-Start the Flask app before uploading/running the board. Allow inbound connections to the configured port only on the trusted local network. The ESP32 and host must be on the same Wi-Fi/LAN; client isolation on the access point must be disabled.
+Start the Flask app before uploading/running the board. The ESP32 is an HTTP client that sends requests to Flask; it does not host a web server, and the PC does not need to connect back to the ESP32. With the current `run.py` setup and private LAN `SERVER_BASE_URL`, the board and host must be on networks that can route to each other (usually the same Wi-Fi/LAN); client isolation or firewall rules must not block that traffic.
+
+The ESP32 can join a different Wi-Fi network only if that network can reach the backend. For remote access, use a properly secured production backend over HTTPS with TLS support added to the firmware, or a suitably secured VPN/routed connection. Do not expose Flask's development server directly to the public internet.
 
 ## REST API overview
 
@@ -141,7 +144,7 @@ Admin JSON APIs use the Flask session cookie created by `/api/auth/login`. Devic
 | --- | --- |
 | Authentication | `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me` |
 | Dashboard | `GET /api/dashboard/summary`, `/charts`, `/activity` |
-| Customers | `/api/users` and `/api/users/<id>` |
+| Customers | `/api/users` and `/api/users/<id>` (GET/POST/PUT/DELETE); DELETE with `{"purge_history": true}` removes linked customer history but is refused for active parking or pending gate entries |
 | Vehicles | `/api/vehicles` and `/api/vehicles/<id>` |
 | RFID cards and scans | `/api/rfid/cards`, `/register`, `/scans`, `/unregistered`, `/<card_id>/status` |
 | RFID reader capture | Admin: `POST /api/rfid/capture/request`, `GET /api/rfid/capture/request/<id>`, `POST /api/rfid/capture/request/<id>/cancel`; device: `GET /api/rfid/capture/pending?device_code=PARKPLUS_GATE_01`, `POST /api/rfid/capture/result` |
@@ -225,7 +228,7 @@ Telegram is integrated on the Flask backend. The ESP32 does **not** contain the 
    }).then(r => r.json()).then(console.log);
    ```
 
-The configured Telegram user/group receives a parking-start message only after the IR sensor assigns the actual slot, with the slot and start time. Exit messages include start/end times, parking duration, remaining subscription time, and any overage, plus security/device notifications. If a healthy slot sensor first observes a vehicle and later reports the slot empty while its parking session is still active, PARK+ sends an unscanned-departure alert after five minutes without an RFID exit scan. The alert is cancelled if the vehicle is observed in the slot again or its RFID exit is recorded. Telegram failures are logged and do not stop parking operations.
+The configured Telegram user/group receives a clearly formatted parking-start message only after the IR sensor assigns the actual slot. Exit messages include start/end times, parking duration, remaining subscription time, and any overage. Telegram timestamps are displayed in Indian Standard Time (IST). If a healthy slot sensor later reports an active session's slot empty, PARK+ sends an unscanned-departure alert after the configured threshold. The default is three minutes; change it under **Security → Empty-slot alert threshold**. The alert is cancelled if the vehicle is observed in the slot again or its RFID exit is recorded. Telegram failures are logged and do not stop parking operations.
 
 The bot must receive `/start` before `getUpdates` can return your personal chat ID. For a group, add the bot to the group, send a message there, and run the setup command again. Set the group chat ID (often a negative number) in `TELEGRAM_CHAT_ID`.
 

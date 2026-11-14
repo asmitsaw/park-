@@ -35,6 +35,7 @@ class Config:
     OVERAGE_RATE_PER_HOUR_PAISE = int(os.getenv("OVERAGE_RATE_PER_HOUR_PAISE", "5000"))   # ₹50 per hour
     DEVICE_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("DEVICE_HEARTBEAT_TIMEOUT_SECONDS", "60"))
     SLOT_DISTANCE_THRESHOLD_CM = float(os.getenv("SLOT_DISTANCE_THRESHOLD_CM", "20.0"))    # <= 20cm considered occupied
+    UNSCANNED_DEPARTURE_ALERT_MINUTES = 3
 
     # Telegram notifications (token may be supplied as TELEGRAM_BOT_TOKEN or legacy telegram_bot_token)
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("telegram_bot_token", "")

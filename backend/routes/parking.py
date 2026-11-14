@@ -5,6 +5,7 @@ from backend.config import Config
 from backend.routes.auth import admin_required
 from backend.services.parking_service import process_rfid_entry, process_rfid_exit, process_sensor_telemetry
 from backend.services.telegram_service import (
+    escape_telegram_html,
     format_duration,
     format_telegram_time,
     notify_security_event,
@@ -148,27 +149,27 @@ def gate_scan():
             message = None
         elif action == "entry":
             message = (
-                "✅ PARK+ PARKING STARTED\n"
-                f"Customer: {result.get('customer_name', 'N/A')}\n"
-                f"Vehicle: {result.get('vehicle_reg', 'N/A')}\n"
-                f"Slot: {result.get('slot_code', 'N/A')}\n"
-                f"Start time: {format_telegram_time(result.get('entry_time'))}\n"
-                f"Session: {result.get('session_code', 'N/A')}\n"
-                "Subscription balance before parking: "
+                "<b>✅ PARK+ PARKING STARTED</b>\n\n"
+                f"<b>Customer:</b> {escape_telegram_html(result.get('customer_name'))}\n"
+                f"<b>Vehicle:</b> {escape_telegram_html(result.get('vehicle_reg'))}\n"
+                f"<b>Parking slot:</b> {escape_telegram_html(result.get('slot_code'))}\n"
+                f"<b>Start time:</b> {format_telegram_time(result.get('entry_time'))}\n"
+                f"<b>Session:</b> {escape_telegram_html(result.get('session_code'))}\n"
+                "<b>Subscription balance before parking:</b> "
                 f"{format_duration(result.get('remaining_seconds', 0))}"
             )
         else:
             message = (
-                "🏁 PARK+ PARKING ENDED\n"
-                f"Customer: {result.get('customer_name', 'N/A')}\n"
-                f"Vehicle: {result.get('vehicle_reg', 'N/A')}\n"
-                f"Slot: {result.get('slot_code', 'N/A')}\n"
-                f"Start time: {format_telegram_time(result.get('entry_time'))}\n"
-                f"Exit time: {format_telegram_time(result.get('exit_time'))}\n"
-                f"Time used: {format_duration(result.get('duration_seconds', 0))}\n"
-                "Subscription time remaining: "
+                "<b>🏁 PARK+ PARKING SESSION COMPLETED</b>\n\n"
+                f"<b>Customer:</b> {escape_telegram_html(result.get('customer_name'))}\n"
+                f"<b>Vehicle:</b> {escape_telegram_html(result.get('vehicle_reg'))}\n"
+                f"<b>Parking slot:</b> {escape_telegram_html(result.get('slot_code'))}\n"
+                f"<b>Start time:</b> {format_telegram_time(result.get('entry_time'))}\n"
+                f"<b>Exit time:</b> {format_telegram_time(result.get('exit_time'))}\n"
+                f"<b>Parking duration:</b> {format_duration(result.get('duration_seconds', 0))}\n"
+                "<b>Subscription time remaining:</b> "
                 f"{format_duration(result.get('balance_after_seconds', 0))}\n"
-                f"Overage charge: ₹{result.get('overage_paise', 0) / 100:.2f}"
+                f"<b>Overage charge:</b> ₹{result.get('overage_paise', 0) / 100:.2f}"
             )
         if message:
             send_telegram_message(message)
@@ -272,24 +273,29 @@ def update_slot_sensor():
         if current_health not in ("healthy", "ok") and previous_health in ("healthy", "ok", "unknown"):
             notify_security_event("sensor_malfunction", "high", f"Sensor {slot_code} reported health={sensor_health}, distance={distance_cm} cm on {device_code}.")
         elif current_health in ("healthy", "ok") and previous_health not in ("healthy", "ok", "unknown"):
-            send_telegram_message(f"🟢 PARK+ SENSOR RECOVERED\nSlot: {slot_code}\nDevice: {device_code}")
+            send_telegram_message(
+                "<b>🟢 PARK+ SENSOR RECOVERED</b>\n\n"
+                f"<b>Slot:</b> {escape_telegram_html(slot_code)}\n"
+                f"<b>Device:</b> {escape_telegram_html(device_code)}\n"
+                f"<b>Time:</b> {format_telegram_time(datetime.now(timezone.utc).isoformat())}"
+            )
         if res.get("assigned_session"):
             assigned = res["assigned_session"]
             send_telegram_message(
-                "✅ PARK+ PARKING STARTED\n"
-                f"Customer: {assigned['customer_name']}\n"
-                f"Vehicle: {assigned['vehicle_reg']}\n"
-                f"Slot: {assigned['slot_code']}\n"
-                f"Start time: {format_telegram_time(assigned['entry_time'])}\n"
-                f"Session: {assigned['session_code']}\n"
-                "Subscription balance before parking: "
+                "<b>✅ PARK+ PARKING STARTED</b>\n\n"
+                f"<b>Customer:</b> {escape_telegram_html(assigned['customer_name'])}\n"
+                f"<b>Vehicle:</b> {escape_telegram_html(assigned['vehicle_reg'])}\n"
+                f"<b>Parking slot:</b> {escape_telegram_html(assigned['slot_code'])}\n"
+                f"<b>Start time:</b> {format_telegram_time(assigned['entry_time'])}\n"
+                f"<b>Session:</b> {escape_telegram_html(assigned['session_code'])}\n"
+                "<b>Subscription balance before parking:</b> "
                 f"{format_duration(assigned['remaining_seconds'])}"
             )
         if res.get("departure_alert"):
             send_telegram_message(
-                "🚨 PARK+ UNCONFIRMED DEPARTURE\n"
-                f"{res['departure_alert']}\n"
-                "No RFID exit scan was recorded within five minutes of the slot becoming empty."
+                "<b>🚨 PARK+ UNCONFIRMED DEPARTURE</b>\n\n"
+                f"{escape_telegram_html(res['departure_alert'])}\n\n"
+                "Please scan the RFID tag at the exit to close this parking session."
             )
         return jsonify({"success": True, "data": res})
     except Exception as ex:

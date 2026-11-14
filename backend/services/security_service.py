@@ -1,6 +1,8 @@
 import uuid
 from datetime import datetime, timezone, timedelta
+from backend.config import Config
 from backend.database import get_utc_now_iso
+from backend.services.telegram_service import format_telegram_time
 
 def create_security_event_if_not_duplicate(db, event_type, severity, description, slot_id=None, vehicle_id=None, user_id=None, device_code=None, cooldown_minutes=5):
     """
@@ -55,7 +57,7 @@ def create_security_event_if_not_duplicate(db, event_type, severity, description
     return event_id, True
 
 def check_unscanned_departure(db, slot_id, slot_code, is_occupied_sensor, sensor_health, device_code):
-    """Alert once when a previously observed active car is absent for five minutes."""
+    """Alert once when a previously observed active car remains absent past its configured threshold."""
     cur = db.cursor()
     utc_now = get_utc_now_iso()
 
@@ -112,7 +114,23 @@ def check_unscanned_departure(db, slot_id, slot_code, is_occupied_sensor, sensor
     if watch["alert_sent_at"] is not None:
         return None, None, False
 
-    alert_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cur.execute(
+        "SELECT value FROM system_settings WHERE key = 'unscanned_departure_alert_minutes'"
+    )
+    threshold_row = cur.fetchone()
+    try:
+        alert_minutes = (
+            int(threshold_row["value"])
+            if threshold_row else Config.UNSCANNED_DEPARTURE_ALERT_MINUTES
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid unscanned departure alert threshold setting.") from exc
+    if not 1 <= alert_minutes <= 1440:
+        raise ValueError("Unscanned departure alert threshold must be between 1 and 1440 minutes.")
+
+    alert_cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=alert_minutes)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
     if watch["empty_since"] > alert_cutoff:
         return None, None, False
 
@@ -124,10 +142,13 @@ def check_unscanned_departure(db, slot_id, slot_code, is_occupied_sensor, sensor
     if not cur.rowcount:
         return None, None, False
 
+    threshold_unit = "minute" if alert_minutes == 1 else "minutes"
     desc = (
         f"Vehicle {active_session['registration_number']} ({active_session['full_name']}) "
-        f"in Slot {slot_code} has been absent since {watch['empty_since']} "
-        f"without an RFID exit scan. Parking started at {active_session['entry_time']}."
+        f"in Slot {slot_code} has been absent since {format_telegram_time(watch['empty_since'])} "
+        f"without an RFID exit scan. Parking started at "
+        f"{format_telegram_time(active_session['entry_time'])}. "
+        f"Alert threshold: {alert_minutes} {threshold_unit}."
     )
     event_id, _ = create_security_event_if_not_duplicate(
         db=db,

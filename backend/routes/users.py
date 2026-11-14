@@ -192,3 +192,126 @@ def change_status(user_id):
 
     return jsonify({"success": True, "message": f"Customer status changed to {status}."})
 
+@users_bp.route("/<int:user_id>", methods=["DELETE"])
+@admin_required
+def delete_user(user_id):
+    data = request.get_json(silent=True) or {}
+    purge_history = data.get("purge_history") is True
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("BEGIN IMMEDIATE")
+
+    cur.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+    if not cur.fetchone():
+        db.rollback()
+        return jsonify({"success": False, "error": "Customer not found."}), 404
+
+    cur.execute("""
+        SELECT id FROM parking_sessions
+        WHERE (user_id = ? OR vehicle_id IN (
+            SELECT id FROM vehicles WHERE user_id = ?
+        )) AND status IN ('active', 'overstay')
+        LIMIT 1
+    """, (user_id, user_id))
+    if cur.fetchone():
+        db.rollback()
+        return jsonify({
+            "success": False,
+            "error": "Cannot delete a customer with a vehicle in an active parking session. Complete the RFID exit first."
+        }), 409
+
+    cur.execute("""
+        SELECT id FROM parking_slots
+        WHERE is_occupied = 1 AND current_vehicle_id IN (
+            SELECT id FROM vehicles WHERE user_id = ?
+        )
+        LIMIT 1
+    """, (user_id,))
+    if cur.fetchone():
+        db.rollback()
+        return jsonify({
+            "success": False,
+            "error": "Cannot delete a customer while one of their vehicles is detected in an occupied parking slot."
+        }), 409
+
+    cur.execute("""
+        SELECT id FROM pending_gate_entries
+        WHERE user_id = ? AND status = 'pending'
+        LIMIT 1
+    """, (user_id,))
+    if cur.fetchone():
+        db.rollback()
+        return jsonify({
+            "success": False,
+            "error": "Cannot delete a customer with a pending gate entry. Wait for it to expire, then try again."
+        }), 409
+
+    cur.execute("""
+        SELECT 1
+        WHERE EXISTS (
+            SELECT 1 FROM parking_sessions
+            WHERE user_id = ? OR vehicle_id IN (
+                SELECT id FROM vehicles WHERE user_id = ?
+            )
+        )
+        OR EXISTS (SELECT 1 FROM subscriptions WHERE user_id = ?)
+        OR EXISTS (
+            SELECT 1 FROM subscription_transactions
+            WHERE user_id = ? OR subscription_id IN (
+                SELECT id FROM subscriptions WHERE user_id = ?
+            )
+        )
+        LIMIT 1
+    """, (user_id, user_id, user_id, user_id, user_id))
+    has_history = cur.fetchone() is not None
+    if has_history and not purge_history:
+        db.rollback()
+        return jsonify({
+            "success": False,
+            "error": "This customer has parking or subscription history. Confirm permanent history deletion to continue."
+        }), 409
+
+    cur.execute("""
+        DELETE FROM rfid_scan_logs
+        WHERE user_id = ?
+           OR vehicle_id IN (SELECT id FROM vehicles WHERE user_id = ?)
+           OR card_uid IN (
+               SELECT card_uid FROM rfid_cards
+               WHERE user_id = ?
+                  OR vehicle_id IN (SELECT id FROM vehicles WHERE user_id = ?)
+           )
+    """, (user_id, user_id, user_id, user_id))
+    cur.execute("""
+        DELETE FROM subscription_transactions
+        WHERE user_id = ?
+           OR subscription_id IN (
+               SELECT id FROM subscriptions WHERE user_id = ?
+           )
+           OR parking_session_id IN (
+               SELECT id FROM parking_sessions
+               WHERE user_id = ? OR vehicle_id IN (
+                   SELECT id FROM vehicles WHERE user_id = ?
+               )
+           )
+    """, (user_id, user_id, user_id, user_id))
+    cur.execute("""
+        DELETE FROM parking_sessions
+        WHERE user_id = ? OR vehicle_id IN (
+            SELECT id FROM vehicles WHERE user_id = ?
+        )
+    """, (user_id, user_id))
+    cur.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
+    cur.execute("""
+        DELETE FROM rfid_cards
+        WHERE user_id = ?
+           OR vehicle_id IN (SELECT id FROM vehicles WHERE user_id = ?)
+    """, (user_id, user_id))
+    cur.execute("DELETE FROM vehicles WHERE user_id = ?", (user_id,))
+    cur.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    db.commit()
+
+    return jsonify({
+        "success": True,
+        "message": "Customer, vehicles, RFID cards and scans, parking sessions, subscriptions, and transaction history deleted. Security events and support tickets were retained without the customer link."
+    })
+

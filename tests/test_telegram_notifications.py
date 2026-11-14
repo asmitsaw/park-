@@ -2,12 +2,17 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from backend.app import create_app
 from backend.config import Config
 from backend.database import get_db_connection, get_utc_now_iso, init_db
 from backend.services.parking_service import process_sensor_telemetry
+from backend.services.telegram_service import (
+    format_telegram_time,
+    notify_security_event,
+    send_telegram_message,
+)
 
 
 class TelegramParkingNotificationTests(unittest.TestCase):
@@ -87,6 +92,77 @@ class TelegramParkingNotificationTests(unittest.TestCase):
         self.assertEqual(db.execute("SELECT COUNT(*) FROM rfid_cards").fetchone()[0], 0)
         self.assertEqual(db.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0], 0)
         self.assertEqual(db.execute("SELECT COUNT(*) FROM devices").fetchone()[0], 0)
+        alert_setting = db.execute("""
+            SELECT value FROM system_settings
+            WHERE key = 'unscanned_departure_alert_minutes'
+        """).fetchone()
+        self.assertEqual(alert_setting["value"], "3")
+        db.close()
+
+    def test_telegram_time_uses_indian_standard_time(self):
+        self.assertEqual(
+            format_telegram_time("2026-11-14T16:00:00Z"),
+            "14 Nov 2026, 09:30 PM IST",
+        )
+
+    def test_dashboard_contains_security_threshold_control(self):
+        db = get_db_connection(Config.DB_PATH)
+        admin_id = db.execute("SELECT id FROM admins LIMIT 1").fetchone()["id"]
+        db.close()
+        with self.client.session_transaction() as session:
+            session["admin_id"] = admin_id
+
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'id="departureAlertMinutes"', response.data)
+        self.assertIn(b"/static/js/app.js?v=20261114.2", response.data)
+
+    def test_security_notification_escapes_html_in_customer_supplied_text(self):
+        with patch("backend.services.telegram_service.send_telegram_message") as send_message:
+            notify_security_event("suspicious_activity", "high", "Vehicle <AB&12>")
+
+        message = send_message.call_args.args[0]
+        self.assertIn("PARK+ SECURITY ALERT</b>", message)
+        self.assertIn("Vehicle &lt;AB&amp;12&gt;", message)
+        self.assertIn("<b>Time:</b>", message)
+
+    def test_telegram_messages_use_html_parse_mode(self):
+        response = Mock()
+        response.json.return_value = {"ok": True}
+        with patch.object(Config, "TELEGRAM_BOT_TOKEN", "test-token"), \
+             patch.object(Config, "TELEGRAM_CHAT_ID", "1234"), \
+             patch("backend.services.telegram_service.requests.post", return_value=response) as post:
+            self.assertTrue(send_telegram_message("<b>PARK+</b>"))
+
+        self.assertEqual(post.call_args.kwargs["json"]["parse_mode"], "HTML")
+
+    def test_security_threshold_setting_api_validates_and_saves_minutes(self):
+        db = get_db_connection(Config.DB_PATH)
+        admin_id = db.execute("SELECT id FROM admins LIMIT 1").fetchone()["id"]
+        db.close()
+        with self.client.session_transaction() as session:
+            session["admin_id"] = admin_id
+
+        valid = self.client.put(
+            "/api/settings",
+            json={"unscanned_departure_alert_minutes": 1},
+        )
+        invalid = self.client.put(
+            "/api/settings",
+            json={"unscanned_departure_alert_minutes": 0},
+        )
+
+        self.assertEqual(valid.status_code, 200)
+        self.assertEqual(invalid.status_code, 400)
+        db = get_db_connection(Config.DB_PATH)
+        self.assertEqual(
+            db.execute("""
+                SELECT value FROM system_settings
+                WHERE key = 'unscanned_departure_alert_minutes'
+            """).fetchone()["value"],
+            "1",
+        )
         db.close()
 
     def test_entry_and_exit_telegram_messages_include_session_and_subscription_details(self):
@@ -126,7 +202,7 @@ class TelegramParkingNotificationTests(unittest.TestCase):
             )
             entry_message = send_message.call_args.args[0]
             self.assertIn("PARKING STARTED", entry_message)
-            self.assertIn("Slot: P02", entry_message)
+            self.assertIn("<b>Parking slot:</b> P02", entry_message)
             self.assertIn("Start time:", entry_message)
             self.assertIn("Subscription balance before parking:", entry_message)
 
@@ -137,9 +213,9 @@ class TelegramParkingNotificationTests(unittest.TestCase):
             )
             self.assertEqual(exit_response.status_code, 200)
             exit_message = send_message.call_args.args[0]
-            self.assertIn("PARKING ENDED", exit_message)
+            self.assertIn("PARKING SESSION COMPLETED", exit_message)
             self.assertIn("Exit time:", exit_message)
-            self.assertIn("Time used:", exit_message)
+            self.assertIn("Parking duration:", exit_message)
             self.assertIn("Subscription time remaining:", exit_message)
 
     def test_ir_transition_assigns_the_sensor_detected_slot_not_p01(self):
@@ -173,7 +249,7 @@ class TelegramParkingNotificationTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             assigned = response.get_json()["data"]["assigned_session"]
             self.assertEqual(assigned["slot_code"], "P02")
-            self.assertIn("Slot: P02", send_message.call_args.args[0])
+            self.assertIn("<b>Parking slot:</b> P02", send_message.call_args.args[0])
 
         db = get_db_connection(Config.DB_PATH)
         row = db.execute("""
@@ -246,7 +322,7 @@ class TelegramParkingNotificationTests(unittest.TestCase):
         )
         db.close()
 
-    def test_unscanned_departure_alert_waits_five_minutes_and_sends_once(self):
+    def test_unscanned_departure_alert_waits_three_minutes_and_sends_once(self):
         self.create_test_customer()
         self.start_parking_session()
         db = get_db_connection(Config.DB_PATH)
@@ -254,7 +330,7 @@ class TelegramParkingNotificationTests(unittest.TestCase):
         process_sensor_telemetry(db, "PARKPLUS_GATE_01", "P01", 30.0, False)
         db.execute(
             "UPDATE parking_departure_watches SET empty_since = ?",
-            ((datetime.now(timezone.utc) - timedelta(minutes=5, seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),)
+            ((datetime.now(timezone.utc) - timedelta(minutes=3, seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),)
         )
         db.commit()
         db.close()
@@ -275,9 +351,43 @@ class TelegramParkingNotificationTests(unittest.TestCase):
             send_message.assert_called_once()
             self.assertIn("UNCONFIRMED DEPARTURE", send_message.call_args.args[0])
             self.assertIn("TEST-001", send_message.call_args.args[0])
+            self.assertIn("Alert threshold: 3 minutes.", send_message.call_args.args[0])
+            self.assertIn("IST", send_message.call_args.args[0])
 
             self.client.post("/api/slots/update", json=payload, headers=self.device_headers())
             send_message.assert_called_once()
+
+    def test_security_threshold_can_be_changed_to_one_minute(self):
+        self.create_test_customer()
+        self.start_parking_session()
+        db = get_db_connection(Config.DB_PATH)
+        process_sensor_telemetry(db, "PARKPLUS_GATE_01", "P01", 10.0, True)
+        process_sensor_telemetry(db, "PARKPLUS_GATE_01", "P01", 30.0, False)
+        db.execute("""
+            UPDATE system_settings SET value = '1'
+            WHERE key = 'unscanned_departure_alert_minutes'
+        """)
+        db.execute(
+            "UPDATE parking_departure_watches SET empty_since = ?",
+            ((datetime.now(timezone.utc) - timedelta(minutes=1, seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),)
+        )
+        db.commit()
+        db.close()
+
+        with patch("backend.routes.parking.send_telegram_message") as send_message:
+            response = self.client.post(
+                "/api/slots/update",
+                json={
+                    "device_code": "PARKPLUS_GATE_01",
+                    "slot_code": "P01",
+                    "occupied": False,
+                    "sensor_health": "healthy",
+                    "distance_cm": 30,
+                },
+                headers=self.device_headers(),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Alert threshold: 1 minute.", send_message.call_args.args[0])
 
     def test_empty_slot_without_prior_occupied_read_does_not_trigger_departure_alert(self):
         self.create_test_customer()
@@ -327,7 +437,7 @@ class TelegramParkingNotificationTests(unittest.TestCase):
                 headers=self.device_headers(),
             )
             self.assertEqual(response.status_code, 200)
-            self.assertIn("PARKING ENDED", send_message.call_args.args[0])
+            self.assertIn("PARKING SESSION COMPLETED", send_message.call_args.args[0])
 
             send_message.reset_mock()
             self.client.post(

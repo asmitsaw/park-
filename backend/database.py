@@ -125,6 +125,7 @@ def init_db(db_path=None, force=False):
             ("overage_rate_per_hour_paise", str(Config.OVERAGE_RATE_PER_HOUR_PAISE), "Hourly rate in paise charged for parking exceeding subscription balance"),
             ("device_heartbeat_timeout_seconds", str(Config.DEVICE_HEARTBEAT_TIMEOUT_SECONDS), "Threshold in seconds after which an IoT device is classified as offline"),
             ("slot_distance_threshold_cm", str(Config.SLOT_DISTANCE_THRESHOLD_CM), "Distance threshold in cm: below this distance slot is occupied"),
+            ("unscanned_departure_alert_minutes", str(Config.UNSCANNED_DEPARTURE_ALERT_MINUTES), "Minutes a slot must remain empty without an RFID exit scan before sending a departure alert"),
             ("system_mode", "production", "Operating mode of the system: production or simulation"),
             ("auto_gate_open_seconds", "6", "Duration in seconds gate barrier remains raised before automatic lowering")
         ]

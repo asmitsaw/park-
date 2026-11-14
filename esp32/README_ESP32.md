@@ -76,11 +76,13 @@ Install these libraries via **Tools -> Manage Libraries...**:
 3. Connect the ESP32 via micro-USB, select the board **ESP32 Dev Module**, and click **Upload**.
 4. Open the Serial Monitor at `115200 baud` to verify Wi-Fi association and initial heartbeat transmission.
 
+The ESP32 makes HTTP requests to the Flask backend; it does not run a web server, and the backend does not need to initiate a connection to the ESP32. The configured backend address must be reachable from the ESP32's network. In this local setup, use the PC's LAN IP and allow the configured port through its firewall. Different Wi-Fi networks work only when routing or a VPN connects them. For public remote access, use a production HTTPS backend and add TLS support to the firmware; do not expose Flask's development server directly to the internet.
+
 ## 5. Admin-Initiated RFID Tag Capture
 
 The admin console can request a one-time tag read from **Customer Registry → RFID Cards → Register RFID Card → Read tag with RC522**. While the request is pending, the firmware polls the capture endpoint and treats the next card presentation as a registration read. It sends the UID to the backend without authorizing entry or moving the barrier. A request expires after 90 seconds.
 
-Use firmware version `1.1.0` or newer for this feature. Set `DEVICE_SECRET` in the sketch to the same value as `DEVICE_SHARED_SECRET` in `backend\.env`. Keep the ESP32 and host on the same trusted local network.
+Use firmware version `1.1.0` or newer for this feature. Set `DEVICE_SECRET` in the sketch to the same value as `DEVICE_SHARED_SECRET` in `backend\.env`. Keep the ESP32 and host on a trusted network that allows the ESP32 to reach the backend.
 
 ## 6. IR-Based Slot Assignment
 

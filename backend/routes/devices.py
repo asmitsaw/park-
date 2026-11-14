@@ -4,7 +4,11 @@ from flask import Blueprint, request, jsonify
 from backend.database import get_db, get_utc_now_iso, dict_from_row
 from backend.config import Config
 from backend.routes.auth import admin_required
-from backend.services.telegram_service import send_telegram_message
+from backend.services.telegram_service import (
+    escape_telegram_html,
+    format_telegram_time,
+    send_telegram_message,
+)
 
 devices_bp = Blueprint("devices", __name__, url_prefix="/api/devices")
 
@@ -45,8 +49,10 @@ def get_devices():
             item["status"] = computed_status
             if computed_status == "offline" and previous_status != "offline":
                 send_telegram_message(
-                    f"🔴 PARK+ DEVICE OFFLINE\nDevice: {item['device_code']}\n"
-                    f"Last heartbeat: {item.get('last_heartbeat') or 'Never'}"
+                    "<b>🔴 PARK+ DEVICE OFFLINE</b>\n\n"
+                    f"<b>Device:</b> {escape_telegram_html(item['device_code'])}\n"
+                    f"<b>Last heartbeat:</b> {format_telegram_time(item.get('last_heartbeat'))}\n"
+                    f"<b>Alert time:</b> {format_telegram_time(utc_now_iso)}"
                 )
 
         item["is_online"] = is_online
@@ -91,7 +97,13 @@ def heartbeat():
     db.commit()
 
     if was_offline:
-        send_telegram_message(f"🟢 PARK+ DEVICE ONLINE\nDevice: {device_code}\nIP: {ip_addr}\nFirmware: {fw_ver}")
+        send_telegram_message(
+            "<b>🟢 PARK+ DEVICE ONLINE</b>\n\n"
+            f"<b>Device:</b> {escape_telegram_html(device_code)}\n"
+            f"<b>IP address:</b> {escape_telegram_html(ip_addr)}\n"
+            f"<b>Firmware:</b> {escape_telegram_html(fw_ver)}\n"
+            f"<b>Time:</b> {format_telegram_time(utc_now)}"
+        )
 
     return jsonify({
         "success": True,

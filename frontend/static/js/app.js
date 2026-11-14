@@ -524,6 +524,7 @@ class ParkPlusApp {
                       onclick="app.toggleCustomerStatus(${u.id}, '${u.account_status}')">
                 ${u.account_status === 'active' ? 'Deactivate' : 'Activate'}
               </button>
+              <button class="btn btn-sm btn-danger" onclick="app.deleteCustomer(${u.id})">Delete</button>
             </td>
           </tr>
         `;
@@ -566,6 +567,26 @@ class ParkPlusApp {
       }
     } catch (e) {
       this.showToast('Server communication error', 'error');
+    }
+  }
+
+  async deleteCustomer(userId) {
+    if (!confirm('Permanently delete this customer and linked history? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`/api/users/${userId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ purge_history: true })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        this.showToast(data.message, 'success');
+        this.loadCustomers();
+      } else {
+        this.showToast(data.error || 'Failed to delete customer', 'error');
+      }
+    } catch (e) {
+      this.showToast('Error communicating with server', 'error');
     }
   }
 
@@ -945,10 +966,17 @@ class ParkPlusApp {
     this.openModal('assignSubModal');
   }
 
+  openPlanModal() {
+    const form = document.getElementById('planForm');
+    if (form) form.reset();
+    this.openModal('planModal');
+  }
+
   // ------------------------------------------------------------------------
   // 7. SECURITY INCIDENTS
   // ------------------------------------------------------------------------
   async loadSecurity() {
+    await this.loadDepartureAlertThreshold();
     try {
       const severity = document.getElementById('incidentSeverityFilter')?.value || '';
       const status = document.getElementById('incidentStatusFilter')?.value || '';
@@ -990,6 +1018,49 @@ class ParkPlusApp {
       }).join('');
     } catch (e) {
       this.showToast('Error loading security incidents', 'error');
+    }
+  }
+
+  async loadDepartureAlertThreshold() {
+    const input = document.getElementById('departureAlertMinutes');
+    if (!input) return;
+    try {
+      const res = await fetch('/api/settings');
+      const data = await res.json();
+      if (!res.ok) {
+        this.showToast(data.error || 'Failed to load security threshold', 'error');
+        return;
+      }
+      const setting = (data.settings || []).find(
+        item => item.key === 'unscanned_departure_alert_minutes'
+      );
+      if (setting) input.value = setting.value;
+    } catch (e) {
+      this.showToast('Error loading security threshold', 'error');
+    }
+  }
+
+  async saveDepartureAlertThreshold(e) {
+    e.preventDefault();
+    const minutes = Number(document.getElementById('departureAlertMinutes').value);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+      this.showToast('Enter a whole number from 1 to 1440 minutes', 'error');
+      return;
+    }
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unscanned_departure_alert_minutes: minutes })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        this.showToast('Departure alert threshold saved', 'success');
+      } else {
+        this.showToast(data.error || 'Failed to save security threshold', 'error');
+      }
+    } catch (e) {
+      this.showToast('Server communication error', 'error');
     }
   }
 
@@ -1342,10 +1413,52 @@ class ParkPlusApp {
       });
     }
 
+    // Subscription Plan Form Submit
+    const planForm = document.getElementById('planForm');
+    if (planForm) {
+      planForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const payload = {
+          name: document.getElementById('planFormName').value.trim(),
+          plan_type: document.getElementById('planFormType').value,
+          duration_days: Number(document.getElementById('planFormDuration').value),
+          allocated_hours: Number(document.getElementById('planFormHours').value),
+          price_inr: Number(document.getElementById('planFormPrice').value),
+          description: document.getElementById('planFormDescription').value.trim()
+        };
+
+        try {
+          const res = await fetch('/api/subscriptions/plans', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (res.ok) {
+            this.showToast(data.message, 'success');
+            this.closeModal('planModal');
+            this.loadSubscriptions();
+          } else {
+            this.showToast(data.error || 'Failed to create plan', 'error');
+          }
+        } catch (err) {
+          this.showToast('Server error while creating plan', 'error');
+        }
+      });
+    }
+
     // Settings Form Submit
     const settingsForm = document.getElementById('settingsForm');
     if (settingsForm) {
       settingsForm.addEventListener('submit', (e) => this.saveSettings(e));
+    }
+
+    const departureAlertSettingsForm = document.getElementById('departureAlertSettingsForm');
+    if (departureAlertSettingsForm) {
+      departureAlertSettingsForm.addEventListener(
+        'submit',
+        (e) => this.saveDepartureAlertThreshold(e)
+      );
     }
 
     // Search and filter button triggers

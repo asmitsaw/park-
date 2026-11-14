@@ -17,6 +17,22 @@ def get_settings():
 @admin_required
 def update_settings():
     data = request.get_json(silent=True) or {}
+    threshold_key = "unscanned_departure_alert_minutes"
+    if threshold_key in data:
+        raw_threshold = data[threshold_key]
+        if isinstance(raw_threshold, bool) or not str(raw_threshold).strip().isdigit():
+            return jsonify({
+                "success": False,
+                "error": "Departure alert threshold must be a whole number of minutes."
+            }), 400
+        threshold = int(raw_threshold)
+        if not 1 <= threshold <= 1440:
+            return jsonify({
+                "success": False,
+                "error": "Departure alert threshold must be between 1 and 1440 minutes."
+            }), 400
+        data[threshold_key] = threshold
+
     db = get_db()
     cur = db.cursor()
     utc_now = get_utc_now_iso()
