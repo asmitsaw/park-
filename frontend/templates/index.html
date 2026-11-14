@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PARK+ | Intelligent Parking &amp; Vehicle Security System</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <script src="/static/vendor/chart.umd.min.js"></script>
+</head>
+<body>
+
+  <div class="app-wrapper">
+    
+    <!-- ==================== SIDEBAR ==================== -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-header">
+        <div class="brand-logo-wrap">
+          <div>
+            <div class="brand-title">
+              PARK<span class="brand-plus">+</span>
+            </div>
+            <div class="brand-tagline">Park Smart. Stay Secure.</div>
+          </div>
+        </div>
+      </div>
+
+      <nav class="nav-menu" aria-label="Main navigation">
+        <button class="nav-item nav-group-item active" type="button" data-group="overview">
+          <span>📊</span> Overview &amp; Parking
+        </button>
+        <button class="nav-item nav-group-item" type="button" data-group="registry">
+          <span>👥</span> Customer Registry
+        </button>
+        <button class="nav-item nav-group-item" type="button" data-group="operations">
+          <span>🛡️</span> Security &amp; System
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="admin-profile-pill">
+          <div class="admin-avatar" id="adminAvatar">A</div>
+          <div class="admin-meta">
+            <div class="admin-name" id="adminNameDisplay">Admin</div>
+            <div class="admin-role" id="adminRoleDisplay">Superadmin</div>
+          </div>
+        </div>
+        <button id="logoutBtn" class="btn btn-sm btn-outline" title="Log Out">🚪</button>
+      </div>
+    </aside>
+
+    <!-- ==================== MAIN CONTENT WRAPPER ==================== -->
+    <div class="main-wrapper">
+      
+      <!-- Top Navbar -->
+      <header class="top-navbar">
+        <div class="page-title-wrap">
+          <button class="mobile-menu-toggle" id="mobileMenuToggle">☰</button>
+          <h2 class="current-page-title" id="pageTitle">Live Overview</h2>
+        </div>
+
+        <div class="navbar-actions">
+          <!-- ESP32 Online status pill -->
+          <div class="system-status-badge" id="deviceStatusPill">
+            <span class="status-dot offline" id="deviceStatusDot"></span>
+            <span id="deviceStatusText">ESP32 Offline</span>
+          </div>
+
+          <!-- Refresh Data button -->
+          <button class="btn btn-sm btn-outline" id="refreshDataBtn" title="Refresh Current View">
+            🔄
+          </button>
+        </div>
+      </header>
+
+      <nav class="module-tabs" id="moduleTabs" aria-label="Modules in this section"></nav>
+
+      <!-- Body / Views Container -->
+      <main class="content-body">
+        
+        <!-- ==================== 1. DASHBOARD VIEW ==================== -->
+        <section id="view-dashboard" class="page-view">
+          
+          <!-- Top KPI Tiles -->
+          <div class="kpi-grid">
+            <div class="kpi-card kpi-primary">
+              <div class="kpi-label">Available Slots</div>
+              <div class="kpi-value" id="kpiAvailableSlots">--</div>
+              <div class="kpi-footer">Total: 2 Slots (P01, P02)</div>
+            </div>
+
+            <div class="kpi-card kpi-secondary">
+              <div class="kpi-label">Vehicles Parked</div>
+              <div class="kpi-value" id="kpiVehiclesParked">--</div>
+              <div class="kpi-footer">Occupied: <span id="kpiOccupiedSlots">--</span></div>
+            </div>
+
+            <div class="kpi-card kpi-accent">
+              <div class="kpi-label">Active Subscriptions</div>
+              <div class="kpi-value" id="kpiActiveSubs">--</div>
+              <div class="kpi-footer">Customers: <span id="kpiTotalCustomers">--</span></div>
+            </div>
+
+            <div class="kpi-card kpi-warning">
+              <div class="kpi-label">Today's Traffic</div>
+              <div class="kpi-value"><span id="kpiTodayEntries">0</span><span style="font-size:22px;margin:0 4px;">/</span><span id="kpiTodayExits">0</span></div>
+              <div class="kpi-footer">Entries / Exits</div>
+            </div>
+
+            <div class="kpi-card kpi-danger">
+              <div class="kpi-label">Active Incidents</div>
+              <div class="kpi-value" id="kpiActiveIncidents">--</div>
+              <div class="kpi-footer">Requires Investigation</div>
+            </div>
+          </div>
+
+          <!-- Parking Slot Live Visualizer Cards (P01 & P02) -->
+          <h3 style="margin-bottom: 14px; font-size: 20px;">🅿️ Real-Time Slot Visualizer</h3>
+          <div class="slots-showcase-grid" id="slotsShowcaseGrid">
+            <!-- Dynamically populated slot cards -->
+          </div>
+
+          <!-- Charts Grid -->
+          <div class="chart-grid">
+            <div class="chart-box">
+              <div class="card-header">
+                <div class="card-title">📊 7-Day Traffic Trends</div>
+                <div class="card-subtitle">Daily Entries vs. Exits</div>
+              </div>
+              <div class="chart-canvas-container">
+                <canvas id="trafficTrendChart"></canvas>
+              </div>
+            </div>
+
+            <div class="chart-box">
+              <div class="card-header">
+                <div class="card-title">⏱️ Subscription Distribution</div>
+                <div class="card-subtitle">Plans currently active</div>
+              </div>
+              <div class="chart-canvas-container">
+                <canvas id="subscriptionDistChart"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <!-- Recent Activity Tables -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">📡 Latest RFID Gate Scans</div>
+              <button class="btn btn-sm btn-outline" onclick="app.navigateTo('rfid')">View All</button>
+            </div>
+            <div class="table-container" style="margin-bottom: 0;">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Card UID</th>
+                    <th>Customer</th>
+                    <th>Vehicle</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Gate Decision</th>
+                  </tr>
+                </thead>
+                <tbody id="recentScansTableBody">
+                  <tr><td colspan="7" class="text-center">Loading scan logs...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </section>
+
+        <!-- ==================== 2. PARKING & SESSIONS VIEW ==================== -->
+        <section id="view-parking" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">🅿️ Physical Parking Slots</div>
+            </div>
+            <div class="slots-showcase-grid" id="parkingSlotsDetailedGrid"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">📋 Parking Sessions Log</div>
+              <div style="display:flex; gap:10px;">
+                <select id="sessionStatusFilter" class="form-control" style="width: auto; padding: 6px 12px;">
+                  <option value="">All Statuses</option>
+                  <option value="active">Active Only</option>
+                  <option value="completed">Completed</option>
+                </select>
+                <button class="btn btn-sm btn-outline" id="filterSessionsBtn">Apply</button>
+              </div>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Session Code</th>
+                    <th>Slot</th>
+                    <th>Vehicle</th>
+                    <th>Customer</th>
+                    <th>Entry Time</th>
+                    <th>Exit Time</th>
+                    <th>Duration</th>
+                    <th>Billed</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="sessionsTableBody">
+                  <tr><td colspan="9" class="text-center">Loading parking sessions...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 3. CUSTOMER MANAGEMENT ==================== -->
+        <section id="view-customers" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">👥 Registered Customers</div>
+              <button class="btn btn-sm btn-primary" onclick="app.openCustomerModal()">+ Add Customer</button>
+            </div>
+            <div style="display:flex; gap:12px; margin-bottom: 16px;">
+              <input type="text" id="customerSearchInput" class="form-control" placeholder="Search by name, email, phone or code...">
+              <button class="btn btn-sm btn-outline" id="customerSearchBtn">Search</button>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Phone</th>
+                    <th>Vehicles</th>
+                    <th>RFID Cards</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="customersTableBody">
+                  <tr><td colspan="8" class="text-center">Loading customers...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 4. VEHICLE MANAGEMENT ==================== -->
+        <section id="view-vehicles" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">🚙 Vehicle Registry</div>
+              <button class="btn btn-sm btn-primary" onclick="app.openVehicleModal()">+ Register Vehicle</button>
+            </div>
+            <div style="display:flex; gap:12px; margin-bottom: 16px;">
+              <input type="text" id="vehicleSearchInput" class="form-control" placeholder="Search registration number, model...">
+              <button class="btn btn-sm btn-outline" id="vehicleSearchBtn">Search</button>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Reg Number</th>
+                    <th>Customer</th>
+                    <th>Type</th>
+                    <th>Model</th>
+                    <th>Color</th>
+                    <th>Linked Tag</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="vehiclesTableBody">
+                  <tr><td colspan="8" class="text-center">Loading vehicles...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 5. RFID CARD MANAGEMENT ==================== -->
+        <section id="view-rfid" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">💳 RFID Smart Tags</div>
+              <button class="btn btn-sm btn-primary" onclick="app.openRfidModal()">+ Register RFID Card</button>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Card UID</th>
+                    <th>Label</th>
+                    <th>Assigned Customer</th>
+                    <th>Vehicle</th>
+                    <th>Status</th>
+                    <th>Last Used</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="rfidCardsTableBody">
+                  <tr><td colspan="7" class="text-center">Loading RFID tags...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">⚠️ Unregistered / Blocked RFID Scan Alerts</div>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>UID Scanned</th>
+                    <th>Device</th>
+                    <th>Denial Reason</th>
+                    <th>Attempts</th>
+                    <th>Latest Attempt</th>
+                    <th>Quick Action</th>
+                  </tr>
+                </thead>
+                <tbody id="unregisteredScansTableBody">
+                  <tr><td colspan="6" class="text-center">No unauthorized scans detected.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 6. SUBSCRIPTION MANAGEMENT ==================== -->
+        <section id="view-subscriptions" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">⏱️ Subscription Plans</div>
+              <button class="btn btn-sm btn-primary" onclick="app.openPlanModal()">+ Create Plan</button>
+            </div>
+            <div class="kpi-grid" id="subscriptionPlansGrid"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">📜 Customer Subscriptions &amp; Balances</div>
+              <button class="btn btn-sm btn-accent" onclick="app.openAssignSubModal()">+ Assign Plan to Customer</button>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Subscription Code</th>
+                    <th>Customer</th>
+                    <th>Plan</th>
+                    <th>Remaining Balance</th>
+                    <th>Consumed</th>
+                    <th>Expiry Date</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="subscriptionsTableBody">
+                  <tr><td colspan="8" class="text-center">Loading customer subscriptions...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">📑 Immutable Transaction Ledger</div>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Txn Code</th>
+                    <th>Customer</th>
+                    <th>Type</th>
+                    <th>Seconds Amount</th>
+                    <th>Balance After</th>
+                    <th>Amount (₹)</th>
+                    <th>Timestamp</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody id="transactionsTableBody">
+                  <tr><td colspan="8" class="text-center">Loading transactions...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 7. SECURITY & INCIDENTS ==================== -->
+        <section id="view-security" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">🚨 Security Incident Center</div>
+              <button class="btn btn-sm btn-danger" onclick="app.openSecurityModal()">+ Log Manual Incident</button>
+            </div>
+            <div style="display:flex; gap:12px; margin-bottom: 16px;">
+              <select id="incidentSeverityFilter" class="form-control" style="width: auto;">
+                <option value="">All Severities</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+              <select id="incidentStatusFilter" class="form-control" style="width: auto;">
+                <option value="">All Statuses</option>
+                <option value="open">Open</option>
+                <option value="investigating">Investigating</option>
+                <option value="resolved">Resolved</option>
+                <option value="dismissed">Dismissed</option>
+              </select>
+              <button class="btn btn-sm btn-outline" id="filterIncidentsBtn">Filter</button>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Event Code</th>
+                    <th>Type</th>
+                    <th>Severity</th>
+                    <th>Description</th>
+                    <th>Slot / Vehicle</th>
+                    <th>Status</th>
+                    <th>Created At</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="incidentsTableBody">
+                  <tr><td colspan="8" class="text-center">Loading security incidents...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 8. HELPDESK ==================== -->
+        <section id="view-helpdesk" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">🎫 Customer Support &amp; Helpdesk</div>
+              <button class="btn btn-sm btn-primary" onclick="app.openTicketModal()">+ New Ticket</button>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Ticket Code</th>
+                    <th>Subject</th>
+                    <th>Customer</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="helpdeskTableBody">
+                  <tr><td colspan="7" class="text-center">Loading helpdesk tickets...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 9. IOT DEVICE MANAGEMENT ==================== -->
+        <section id="view-devices" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">📡 ESP32 &amp; IoT Hardware Controllers</div>
+              <button class="btn btn-sm btn-outline" onclick="app.loadDevices()">Ping Heartbeat</button>
+            </div>
+            <div class="table-container">
+              <table class="neo-table">
+                <thead>
+                  <tr>
+                    <th>Device Code</th>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>IP Address</th>
+                    <th>Firmware</th>
+                    <th>Status</th>
+                    <th>Last Heartbeat</th>
+                  </tr>
+                </thead>
+                <tbody id="devicesTableBody">
+                  <tr><td colspan="7" class="text-center">Loading IoT devices...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">🔌 ESP32 Hardware Wiring &amp; REST Endpoints</div>
+            </div>
+            <div style="font-size: 14px; line-height: 1.6;">
+              <p><strong>Configured LAN Endpoint:</strong> <code>http://&lt;PC_IP&gt;:5000/api/parking/entry</code></p>
+              <p><strong>Heartbeat Endpoint:</strong> <code>http://&lt;PC_IP&gt;:5000/api/devices/heartbeat</code></p>
+              <p><strong>Ultrasonic Sensor Telemetry:</strong> <code>http://&lt;PC_IP&gt;:5000/api/slots/update</code></p>
+              <div style="margin-top: 14px; padding: 12px; background: #FAF7F2; border: var(--border-thin); border-radius: 4px;">
+                <strong>ESP32 Hardware Pinouts Configured:</strong><br>
+                • RFID RC522: SS/SDA (GPIO 5), SCK (GPIO 18), MOSI (GPIO 23), MISO (GPIO 19), RST (GPIO 26)<br>
+                • Ultrasonic Sensor Slot 1: TRIG (GPIO 12), ECHO (GPIO 13)<br>
+                • Ultrasonic Sensor Slot 2: TRIG (GPIO 27), ECHO (GPIO 14)<br>
+                • SG90 Barrier Servo: Signal (GPIO 4)<br>
+                • I2C LCD Display: SDA (GPIO 21), SCL (GPIO 22)<br>
+                • Buzzer: GPIO 15
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 10. ANALYTICS & REPORTS ==================== -->
+        <section id="view-analytics" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">📈 Analytics Overview</div>
+              <div style="display:flex; gap:10px;">
+                <button class="btn btn-sm btn-outline" onclick="app.downloadReport('sessions')">📥 Export Sessions (CSV)</button>
+                <button class="btn btn-sm btn-outline" onclick="app.downloadReport('transactions')">📥 Export Transactions (CSV)</button>
+              </div>
+            </div>
+            <div class="kpi-grid">
+              <div class="kpi-card kpi-primary">
+                <div class="kpi-label">Avg Parking Duration</div>
+                <div class="kpi-value" id="analyticsAvgDuration">--</div>
+                <div class="kpi-footer">Based on completed sessions</div>
+              </div>
+              <div class="kpi-card kpi-secondary">
+                <div class="kpi-label">Total Revenue</div>
+                <div class="kpi-value" id="analyticsTotalRevenue">--</div>
+                <div class="kpi-footer">Subscriptions &amp; Overages</div>
+              </div>
+              <div class="kpi-card kpi-accent">
+                <div class="kpi-label">Total Sessions</div>
+                <div class="kpi-value" id="analyticsTotalSessions">--</div>
+                <div class="kpi-footer">Past 30 days</div>
+              </div>
+            </div>
+
+            <div class="chart-box">
+              <div class="card-header">
+                <div class="card-title">⏰ Peak Parking Hours</div>
+                <div class="card-subtitle">Vehicles arriving by hour of day (00:00 - 23:00)</div>
+              </div>
+              <div class="chart-canvas-container chart-canvas-container-wide">
+                <canvas id="peakHoursChart"></canvas>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== 11. SETTINGS VIEW ==================== -->
+        <section id="view-settings" class="page-view" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">⚙️ System Configuration</div>
+            </div>
+            <form id="settingsForm">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Min Entry Allowance (Seconds)</label>
+                  <input type="number" id="setting_min_allowance" class="form-control" value="900" required>
+                  <small style="color:var(--color-text-muted);">Minimum remaining seconds to authorize gate entry (e.g. 900s = 15m).</small>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Overage Rate (Paise / Hour)</label>
+                  <input type="number" id="setting_overage_rate" class="form-control" value="5000" required>
+                  <small style="color:var(--color-text-muted);">Rate charged for parking beyond balance (5000 paise = ₹50/hr).</small>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Device Heartbeat Timeout (Seconds)</label>
+                  <input type="number" id="setting_heartbeat_timeout" class="form-control" value="60" required>
+                  <small style="color:var(--color-text-muted);">After this time without ping, ESP32 is flagged offline.</small>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Slot Distance Threshold (cm)</label>
+                  <input type="number" step="0.1" id="setting_slot_threshold" class="form-control" value="20.0" required>
+                  <small style="color:var(--color-text-muted);">Distance below which vehicle is physically confirmed in slot.</small>
+                </div>
+              </div>
+
+              <button type="submit" class="btn btn-primary" style="margin-top: 10px;">Save Configuration</button>
+            </form>
+          </div>
+        </section>
+
+      </main>
+    </div>
+  </div>
+
+  <!-- ==================== MODALS ==================== -->
+
+  <!-- Customer Modal -->
+  <div class="modal-overlay" id="customerModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="customerModalTitle">Add Customer</div>
+        <button class="modal-close-btn" onclick="app.closeModal('customerModal')">✕</button>
+      </div>
+      <form id="customerForm">
+        <input type="hidden" id="custFormId">
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Full Name</label>
+            <input type="text" id="custFormName" class="form-control" required placeholder="e.g. Rahul Verma">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Email Address</label>
+              <input type="email" id="custFormEmail" class="form-control" required placeholder="name@example.com">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Phone Number</label>
+              <input type="text" id="custFormPhone" class="form-control" required placeholder="+91 98765 43210">
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Address</label>
+            <input type="text" id="custFormAddress" class="form-control" placeholder="Resident address...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Account Status</label>
+            <select id="custFormStatus" class="form-control">
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+              <option value="suspended">Suspended</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="app.closeModal('customerModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Customer</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Vehicle Modal -->
+  <div class="modal-overlay" id="vehicleModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title" id="vehicleModalTitle">Register Vehicle</div>
+        <button class="modal-close-btn" onclick="app.closeModal('vehicleModal')">✕</button>
+      </div>
+      <form id="vehicleForm">
+        <input type="hidden" id="vehFormId">
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Owner Customer</label>
+            <select id="vehFormUser" class="form-control" required></select>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Registration Number</label>
+              <input type="text" id="vehFormReg" class="form-control" required placeholder="KA-05-MN-1234">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Vehicle Type</label>
+              <select id="vehFormType" class="form-control">
+                <option value="car">Car (Sedan/Hatchback)</option>
+                <option value="suv">SUV</option>
+                <option value="bike">Two-Wheeler</option>
+                <option value="ev">Electric Vehicle (EV)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Model / Make</label>
+              <input type="text" id="vehFormModel" class="form-control" placeholder="e.g. Honda City">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Color</label>
+              <input type="text" id="vehFormColor" class="form-control" placeholder="e.g. Silver">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="app.closeModal('vehicleModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Register</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- RFID Modal -->
+  <div class="modal-overlay" id="rfidModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">Register RFID Smart Tag</div>
+        <button class="modal-close-btn" onclick="app.closeModal('rfidModal')">✕</button>
+      </div>
+      <form id="rfidForm">
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Card UID (Hexadecimal)</label>
+            <div class="rfid-capture-control">
+              <input type="text" id="rfidFormUid" class="form-control" required readonly placeholder="Scan a tag to fill this field">
+              <button type="button" id="rfidCaptureBtn" class="btn btn-primary" onclick="app.requestRfidCapture()">Read tag with RC522</button>
+            </div>
+            <small id="rfidCaptureStatus" class="form-help" aria-live="polite">Start a reader capture, then present the tag to the ESP32 reader.</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Card Label</label>
+            <input type="text" id="rfidFormLabel" class="form-control" placeholder="e.g. Commuter Pass #1">
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Assign Customer (Optional)</label>
+              <select id="rfidFormUser" class="form-control"></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Bind to Vehicle (Optional)</label>
+              <select id="rfidFormVehicle" class="form-control"></select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="app.closeModal('rfidModal')">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Tag</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Assign Subscription Modal -->
+  <div class="modal-overlay" id="assignSubModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title">Assign Subscription Plan</div>
+        <button class="modal-close-btn" onclick="app.closeModal('assignSubModal')">✕</button>
+      </div>
+      <form id="assignSubForm">
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Customer</label>
+            <select id="assignSubUser" class="form-control" required></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Subscription Plan</label>
+            <select id="assignSubPlan" class="form-control" required></select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="app.closeModal('assignSubModal')">Cancel</button>
+          <button type="submit" class="btn btn-accent">Activate Plan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- App Scripts -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
+

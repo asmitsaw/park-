@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PARK+ | Admin Login</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    body.login-body {
+      background-color: var(--bg-main);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .login-container {
+      width: 100%;
+      max-width: 440px;
+      position: relative;
+    }
+
+    .login-box {
+      background-color: var(--color-surface);
+      border: var(--border-thick);
+      border-radius: 8px;
+      box-shadow: var(--shadow-xl);
+      padding: 32px 28px;
+      position: relative;
+    }
+
+    .login-header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .login-logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background-color: var(--color-primary);
+      border: var(--border-thick);
+      padding: 8px 18px;
+      border-radius: 4px;
+      box-shadow: var(--shadow-sm);
+      margin-bottom: 12px;
+    }
+
+    .login-logo h1 {
+      font-size: 28px;
+      font-weight: 900;
+      letter-spacing: -1px;
+    }
+
+    .login-logo span {
+      background: var(--color-border);
+      color: var(--color-primary);
+      font-size: 18px;
+      font-weight: 900;
+      padding: 2px 8px;
+      border-radius: 3px;
+    }
+
+    .login-subtitle {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .alert-box {
+      display: none;
+      padding: 12px 14px;
+      border: var(--border-thin);
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 13px;
+      margin-bottom: 18px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .alert-danger {
+      background-color: var(--color-danger);
+      color: #FFFFFF;
+    }
+
+    .alert-success {
+      background-color: var(--color-primary);
+      color: var(--color-border);
+    }
+
+    .password-toggle-wrapper {
+      position: relative;
+    }
+
+    .password-toggle-btn {
+      position: absolute;
+      right: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      color: var(--color-text);
+      text-transform: uppercase;
+    }
+
+    .hint-card {
+      margin-top: 20px;
+      background-color: var(--color-highlight);
+      border: var(--border-thin);
+      border-radius: 4px;
+      padding: 12px 14px;
+      font-size: 12px;
+      font-weight: 700;
+      box-shadow: var(--shadow-sm);
+    }
+  </style>
+</head>
+<body class="login-body">
+
+  <div class="login-container">
+    <div class="login-box">
+      
+      <div class="login-header">
+        <div class="login-logo">
+          <h1>PARK</h1>
+          <span>+</span>
+        </div>
+        <p class="login-subtitle">Intelligent Parking &amp; Vehicle Security System</p>
+      </div>
+
+      <div id="loginAlert" class="alert-box alert-danger"></div>
+
+      <form id="loginForm" autocomplete="off">
+        <div class="form-group">
+          <label class="form-label" for="username">Username or Email</label>
+          <input type="text" id="username" class="form-control" placeholder="admin or admin@parkplus.local" required autofocus>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="password">Password</label>
+          <div class="password-toggle-wrapper">
+            <input type="password" id="password" class="form-control" placeholder="••••••••••••" required>
+            <button type="button" id="togglePasswordBtn" class="password-toggle-btn">Show</button>
+          </div>
+        </div>
+
+        <button type="submit" id="submitBtn" class="btn btn-primary" style="width: 100%; padding: 12px; font-size: 15px;">
+          Authenticate &amp; Launch Console
+        </button>
+      </form>
+
+      <div class="hint-card">
+        Admin credentials are configured by your system administrator.
+      </div>
+
+    </div>
+  </div>
+
+  <script>
+    const loginForm = document.getElementById('loginForm');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const togglePasswordBtn = document.getElementById('togglePasswordBtn');
+    const loginAlert = document.getElementById('loginAlert');
+    const submitBtn = document.getElementById('submitBtn');
+
+    // Toggle Password Visibility
+    togglePasswordBtn.addEventListener('click', () => {
+      if (passwordInput.type === 'password') {
+        passwordInput.type = 'text';
+        togglePasswordBtn.textContent = 'Hide';
+      } else {
+        passwordInput.type = 'password';
+        togglePasswordBtn.textContent = 'Show';
+      }
+    });
+
+    // Handle Form Submit
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      loginAlert.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Authenticating...';
+
+      try {
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: usernameInput.value.trim(),
+            password: passwordInput.value
+          })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          loginAlert.className = 'alert-box alert-success';
+          loginAlert.textContent = data.message || 'Login successful. Redirecting...';
+          loginAlert.style.display = 'block';
+          setTimeout(() => {
+            window.location.href = '/dashboard';
+          }, 400);
+        } else {
+          loginAlert.className = 'alert-box alert-danger';
+          loginAlert.textContent = data.error || 'Authentication failed. Please check credentials.';
+          loginAlert.style.display = 'block';
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Authenticate & Launch Console';
+        }
+      } catch (err) {
+        loginAlert.className = 'alert-box alert-danger';
+        loginAlert.textContent = 'Unable to reach backend server. Check server connection.';
+        loginAlert.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Authenticate & Launch Console';
+      }
+    });
+  </script>
+</body>
+</html>
+

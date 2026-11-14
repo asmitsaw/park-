@@ -1,0 +1,10 @@
+.env
+backend/.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+backend/instance/*.db
+backend/instance/*.db-shm
+backend/instance/*.db-wal
+.pytest_cache/
