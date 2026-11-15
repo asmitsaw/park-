@@ -61,11 +61,11 @@ const char* DEVICE_SECRET   = "YOUR_DEVICE_SHARED_SECRET";
 
 // ---------------- TIMING / BEHAVIOUR -----------------
 const unsigned long HEARTBEAT_INTERVAL_MS = 25000;
-const unsigned long SENSOR_INTERVAL_MS = 1000;
-const unsigned long CAPTURE_POLL_INTERVAL_MS = 1200;
-const unsigned long HTTP_TIMEOUT_MS = 5000;
+const unsigned long SENSOR_INTERVAL_MS = 5000;
+const unsigned long CAPTURE_POLL_INTERVAL_MS = 3000;
+const unsigned long HTTP_TIMEOUT_MS = 8000;
 const unsigned long BARRIER_OPEN_MS = 4500; // prototype timer; not a safety sensor
-const unsigned long RFID_COOLDOWN_MS = 1800;
+const unsigned long RFID_COOLDOWN_MS = 1000;
 const int SERVO_OPEN_ANGLE = 90;
 const int SERVO_CLOSE_ANGLE = 0;
 const uint8_t IR_SAMPLE_COUNT = 7;
@@ -200,13 +200,22 @@ void sendSlotTelemetry(const char* slotCode, bool occupied, bool& previousState)
 }
 
 void readAndSendSlots() {
-  // Stagger reads slightly to avoid simultaneous IR module switching noise.
   bool p01 = readIRStable(IR_PIN_P01);
-  bool p02;
-  sendSlotTelemetry("P01", p01, slotP01Occupied);
-  delay(80);
-  p02 = readIRStable(IR_PIN_P02);
-  sendSlotTelemetry("P02", p02, slotP02Occupied);
+  bool p02 = readIRStable(IR_PIN_P02);
+
+  static bool firstRead = true;
+
+  if (firstRead || p01 != slotP01Occupied) {
+    sendSlotTelemetry("P01", p01, slotP01Occupied);
+  }
+
+  delay(30);
+
+  if (firstRead || p02 != slotP02Occupied) {
+    sendSlotTelemetry("P02", p02, slotP02Occupied);
+  }
+
+  firstRead = false;
 }
 
 void pollRfidCapture() {
@@ -282,7 +291,53 @@ bool parseAuthorized(const String& response, String& reason, String& vehicle,
   action = String((const char*)(doc["action"] | "entry"));
   return doc["authorized"] == true;
 }
+void checkRfid() {
 
+  static unsigned long lastCheckLog = 0;
+
+  if (millis() - lastRfidAt < RFID_COOLDOWN_MS) {
+    return;
+  }
+
+  // Check whether the reader detects a new card
+  bool cardPresent = rfid.PICC_IsNewCardPresent();
+
+  if (!cardPresent) {
+    if (millis() - lastCheckLog >= 3000) {
+      Serial.println("[RFID DEBUG] Reader active - no card detected");
+      lastCheckLog = millis();
+    }
+    return;
+  }
+
+  Serial.println("[RFID DEBUG] Card detected. Reading UID...");
+
+  if (!rfid.PICC_ReadCardSerial()) {
+    Serial.println("[RFID DEBUG] UID reading failed");
+    return;
+  }
+
+  String uid = readCardUid();
+
+  Serial.printf("[RFID] Card UID: %s\n", uid.c_str());
+
+  rfid.PICC_HaltA();
+  rfid.PCD_StopCrypto1();
+
+  lastRfidAt = millis();
+
+  Serial.println("[RFID DEBUG] Card communication completed");
+
+  if (activeCaptureRequestId > 0) {
+    Serial.println("[RFID DEBUG] Sending card to registration endpoint");
+    submitRfidCapture(uid);
+  } else {
+    Serial.println("[RFID DEBUG] Sending card to gate endpoint");
+    handleGateScan(uid);
+  }
+
+  Serial.println("[RFID DEBUG] Scan cycle completed");
+}
 void handleGateScan(const String& uid) {
   lcd.clear(); lcd.setCursor(0, 0); lcd.print("RFID SCANNED");
   lcd.setCursor(0, 1); lcd.print(uid.substring(0, 16));
@@ -296,7 +351,10 @@ void handleGateScan(const String& uid) {
   // The combined route determines entry vs exit from this card's active session.
   int code = requestJson("/api/parking/gate/scan", payload, true, response);
   String reason, vehicle, slot, action;
-  bool authorized = (code == 200) && parseAuthorized(response, reason, vehicle, slot, action);
+  bool responseAuthorized = parseAuthorized(response, reason, vehicle, slot, action);
+  bool authorized = (code == 200) && responseAuthorized;
+  if (code <= 0) reason = "Server unavailable";
+  else if (reason.length() == 0) reason = "HTTP " + String(code);
 
   if (authorized) {
     beepSuccess();
@@ -320,6 +378,8 @@ void handleGateScan(const String& uid) {
   delay(1400);
   showReady();
 }
+
+
 
 void setup() {
   Serial.begin(115200);
@@ -376,6 +436,8 @@ void setup() {
 }
 
 void loop() {
+  checkRfid();
+
   unsigned long now = millis();
   maintainBarrier();
 
@@ -392,15 +454,4 @@ void loop() {
     pollRfidCapture();
   }
 
-  if (now - lastRfidAt < RFID_COOLDOWN_MS) return;
-  if (!rfid.PICC_IsNewCardPresent() || !rfid.PICC_ReadCardSerial()) return;
-
-  String uid = readCardUid();
-  rfid.PICC_HaltA();
-  rfid.PCD_StopCrypto1();
-  lastRfidAt = millis();
-  Serial.printf("[RFID] Card UID: %s\n", uid.c_str());
-
-  if (activeCaptureRequestId > 0) submitRfidCapture(uid);
-  else handleGateScan(uid);
 }

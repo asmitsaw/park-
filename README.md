@@ -198,7 +198,8 @@ These tests use a temporary SQLite database and do not reset the project's norma
 - **Cannot log in:** confirm `backend\.env` was created before the first DB initialization. Existing seeded admin records keep their original password; resetting the database is destructive.
 - **ESP32 is offline:** confirm the host LAN IP, port, Wi-Fi credentials, firewall rule, shared network, and heartbeat requests in the serial monitor.
 - **RFID capture waits or expires:** ensure the board is powered, online, running firmware 1.1.0+, using the matching device secret, and that the RC522 is wired correctly.
-- **Tag UID is not captured:** verify the RC522 is powered from 3.3V, check SPI pin wiring, and present a compatible 13.56 MHz tag.
+- **Tag UID is not captured or a tag reads only once:** verify the RC522 is powered from 3.3V, check SPI pin wiring, and present a compatible 13.56 MHz tag. After each successful read, remove the tag fully from the reader and then present it again; the firmware halts a tag after reading it to prevent duplicate scans while it is held in place.
+- **Gate displays ACCESS DENIED:** the reader detected a tag and the server rejected the scan. Check the firmware serial monitor for the denial reason; register that exact card UID and ensure its customer, vehicle, and subscription are active. A second scan while the vehicle has an active session is treated as an exit, not another entry. The exit session is created only after an IR slot detects the vehicle.
 - **Sensor data is implausible:** check sensor wiring and use an appropriate level shifter or resistor divider on each HC-SR04 ECHO signal; ESP32 GPIO inputs are not 5V tolerant.
 - **Charts are blank:** confirm `frontend\static\vendor\chart.umd.min.js` exists and the browser loaded `/static/vendor/chart.umd.min.js`.
 - **Port is already in use:** set `PORT` to another port and update `SERVER_BASE_URL` in the firmware to match.
