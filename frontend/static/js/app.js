@@ -322,7 +322,7 @@ class ParkPlusApp {
           </div>
 
           <div class="slot-sensor-bar">
-            <span>Ultrasonic Status: <strong>${(slot.last_sensor_status || 'healthy').toUpperCase()}</strong></span>
+            <span>IR Status: <strong>${(slot.last_sensor_status || 'healthy').toUpperCase()}</strong></span>
             <span>Session: <code>${slot.session_code || 'Idle'}</code></span>
           </div>
         </div>

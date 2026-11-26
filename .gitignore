@@ -8,3 +8,4 @@ backend/instance/*.db
 backend/instance/*.db-shm
 backend/instance/*.db-wal
 .pytest_cache/
+.vscode

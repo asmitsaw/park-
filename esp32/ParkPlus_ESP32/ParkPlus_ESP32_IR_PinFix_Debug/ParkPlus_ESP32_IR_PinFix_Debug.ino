@@ -24,6 +24,8 @@
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <HTTPClient.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 #include <ArduinoJson.h>
 #include <SPI.h>
 #include <MFRC522.h>
@@ -61,10 +63,13 @@ const char* DEVICE_SECRET   = "YOUR_DEVICE_SHARED_SECRET";
 
 // ---------------- TIMING / BEHAVIOUR -----------------
 const unsigned long HEARTBEAT_INTERVAL_MS = 25000;
-const unsigned long SENSOR_INTERVAL_MS = 5000;
-const unsigned long CAPTURE_POLL_INTERVAL_MS = 3000;
-const unsigned long HTTP_TIMEOUT_MS = 8000;
+const unsigned long SENSOR_SAMPLE_INTERVAL_MS = 500;
+const unsigned long EMPTY_SLOT_REPORT_INTERVAL_MS = 30000;
+const unsigned long SENSOR_RETRY_INTERVAL_MS = 5000;
+const unsigned long CAPTURE_POLL_INTERVAL_MS = 5000;
+const unsigned long HTTP_TIMEOUT_MS = 3000;
 const unsigned long BARRIER_OPEN_MS = 4500; // prototype timer; not a safety sensor
+const unsigned long RFID_RECOVERY_DELAY_MS = 300;
 const unsigned long RFID_COOLDOWN_MS = 1000;
 const int SERVO_OPEN_ANGLE = 90;
 const int SERVO_CLOSE_ANGLE = 0;
@@ -79,11 +84,22 @@ unsigned long lastHeartbeatAt = 0;
 unsigned long lastSensorAt = 0;
 unsigned long lastCapturePollAt = 0;
 unsigned long lastRfidAt = 0;
-long activeCaptureRequestId = -1;
+volatile long activeCaptureRequestId = -1;
+volatile bool rfidRequestPending = false;
 bool slotP01Occupied = false;
 bool slotP02Occupied = false;
+bool slotP01TelemetryInitialized = false;
+bool slotP02TelemetryInitialized = false;
 bool barrierIsOpen = false;
+volatile bool pendingSecurityAlertBeep = false;
 unsigned long barrierOpenedAt = 0;
+bool rfidRecoveryPending = false;
+unsigned long rfidRecoveryAt = 0;
+unsigned long lastP01TelemetryAt = 0;
+unsigned long lastP02TelemetryAt = 0;
+unsigned long retryP01TelemetryAt = 0;
+unsigned long retryP02TelemetryAt = 0;
+SemaphoreHandle_t networkMutex = nullptr;
 
 String endpoint(const String& path) { return String(SERVER_BASE_URL) + path; }
 
@@ -103,10 +119,25 @@ void showReady() {
   lcd.setCursor(0, 1); lcd.print("Scan RFID Card");
 }
 
+void scheduleRfidRecovery() {
+  rfidRecoveryAt = millis() + RFID_RECOVERY_DELAY_MS;
+  rfidRecoveryPending = true;
+}
+
+void serviceRfidRecovery() {
+  if (!rfidRecoveryPending || (long)(millis() - rfidRecoveryAt) < 0) return;
+
+  rfidRecoveryPending = false;
+  rfid.PCD_Init();
+  delay(50);
+  Serial.println("[RFID] RC522 reinitialized after servo movement");
+}
+
 void openBarrier() {
   barrierServo.write(SERVO_OPEN_ANGLE);
   barrierIsOpen = true;
   barrierOpenedAt = millis();
+  scheduleRfidRecovery();
 }
 void closeBarrier() {
   barrierServo.write(SERVO_CLOSE_ANGLE);
@@ -115,7 +146,10 @@ void closeBarrier() {
 void maintainBarrier() {
   // Demo-only timed closure. Add a physical passage/obstruction safety sensor
   // before using a real barrier; never let a timer close onto a vehicle/person.
-  if (barrierIsOpen && millis() - barrierOpenedAt >= BARRIER_OPEN_MS) closeBarrier();
+  if (barrierIsOpen && millis() - barrierOpenedAt >= BARRIER_OPEN_MS) {
+    closeBarrier();
+    scheduleRfidRecovery();
+  }
 }
 
 bool wifiReady() {
@@ -132,17 +166,32 @@ bool wifiReady() {
   return false;
 }
 
-int requestJson(const String& path, const String& payload, bool isPost, String& response) {
-  if (!wifiReady()) return -1;
+int requestJson(const String& path, const String& payload, bool isPost,
+                String& response, bool rfidPriority = false) {
+  if (!rfidPriority && rfidRequestPending) return -4;
+  if (!networkMutex || xSemaphoreTake(networkMutex, portMAX_DELAY) != pdTRUE) return -3;
+  if (!rfidPriority && rfidRequestPending) {
+    xSemaphoreGive(networkMutex);
+    return -4;
+  }
+  if (!wifiReady()) {
+    xSemaphoreGive(networkMutex);
+    return -1;
+  }
+
   WiFiClient client;
   HTTPClient http;
   http.setTimeout(HTTP_TIMEOUT_MS);
-  if (!http.begin(client, endpoint(path))) return -2;
+  if (!http.begin(client, endpoint(path))) {
+    xSemaphoreGive(networkMutex);
+    return -2;
+  }
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", DEVICE_SECRET);
   int code = isPost ? http.POST(payload) : http.GET();
   response = http.getString();
   http.end();
+  xSemaphoreGive(networkMutex);
   return code;
 }
 
@@ -166,7 +215,7 @@ bool readIRStable(int pin) {
   return activeCount >= IR_REQUIRED_ACTIVE;
 }
 
-void sendSlotTelemetry(const char* slotCode, bool occupied, bool& previousState) {
+bool sendSlotTelemetry(const char* slotCode, bool occupied, bool& previousState) {
   StaticJsonDocument<320> doc;
   doc["device_code"] = DEVICE_CODE;
   doc["slot_code"] = slotCode;
@@ -180,6 +229,7 @@ void sendSlotTelemetry(const char* slotCode, bool occupied, bool& previousState)
   String payload, response;
   serializeJson(doc, payload);
   int code = requestJson("/api/slots/update", payload, true, response);
+  if (code == -4) return false;
   Serial.printf("[SLOT %s] %s | IR | HTTP %d\n",
                 slotCode, occupied ? "OCCUPIED" : "EMPTY", code);
 
@@ -190,32 +240,46 @@ void sendSlotTelemetry(const char* slotCode, bool occupied, bool& previousState)
       const char* alert = result["data"]["security_alert"] | "";
       if (strlen(alert) > 0) {
         Serial.printf("[SECURITY ALERT] %s\n", alert);
-        beepWarning();
+        pendingSecurityAlertBeep = true;
       }
     }
+    return true;
   } else {
     Serial.printf("[API ERROR] Slot update: %s\n", response.c_str());
-    beepWarning();
+    return false;
   }
 }
 
-void readAndSendSlots() {
+void updateSlotTelemetry(const char* slotCode, bool occupied, bool& previousState,
+                         bool& initialized, unsigned long& lastReportedAt,
+                         unsigned long& retryAt) {
+  unsigned long now = millis();
+  bool stateChanged = !initialized || occupied != previousState;
+  bool emptyRefreshDue = initialized && !occupied &&
+                         now - lastReportedAt >= EMPTY_SLOT_REPORT_INTERVAL_MS;
+  if (!stateChanged && !emptyRefreshDue) return;
+  if (retryAt && (long)(now - retryAt) < 0) return;
+  if (sendSlotTelemetry(slotCode, occupied, previousState)) {
+    initialized = true;
+    lastReportedAt = millis();
+    retryAt = 0;
+  } else if (!rfidRequestPending) {
+    retryAt = millis() + SENSOR_RETRY_INTERVAL_MS;
+  }
+}
+
+void sampleAndReportSlots() {
   bool p01 = readIRStable(IR_PIN_P01);
   bool p02 = readIRStable(IR_PIN_P02);
 
-  static bool firstRead = true;
-
-  if (firstRead || p01 != slotP01Occupied) {
-    sendSlotTelemetry("P01", p01, slotP01Occupied);
-  }
-
-  delay(30);
-
-  if (firstRead || p02 != slotP02Occupied) {
-    sendSlotTelemetry("P02", p02, slotP02Occupied);
-  }
-
-  firstRead = false;
+  updateSlotTelemetry(
+    "P01", p01, slotP01Occupied, slotP01TelemetryInitialized,
+    lastP01TelemetryAt, retryP01TelemetryAt
+  );
+  updateSlotTelemetry(
+    "P02", p02, slotP02Occupied, slotP02TelemetryInitialized,
+    lastP02TelemetryAt, retryP02TelemetryAt
+  );
 }
 
 void pollRfidCapture() {
@@ -226,7 +290,6 @@ void pollRfidCapture() {
     Serial.printf("[RFID CAPTURE POLL] HTTP %d %s\\n", code, response.c_str());
     return;
   }
-  Serial.printf("[RFID CAPTURE POLL] HTTP 200 %s\\n", response.c_str());
 
   StaticJsonDocument<256> doc;
   if (deserializeJson(doc, response) != DeserializationError::Ok) return;
@@ -236,12 +299,35 @@ void pollRfidCapture() {
       Serial.printf("[RFID CAPTURE] Request acknowledged. ID=%ld\\n", receivedRequestId);
     }
     activeCaptureRequestId = receivedRequestId;
-    lcd.clear();
-    lcd.setCursor(0, 0); lcd.print("ADMIN TAG CAPTURE");
-    lcd.setCursor(0, 1); lcd.print("Present RFID Tag");
   } else {
     if (activeCaptureRequestId != -1) Serial.println("[RFID CAPTURE] Request no longer pending.");
     activeCaptureRequestId = -1;
+  }
+}
+
+void networkTask(void* parameter) {
+  (void)parameter;
+  lastHeartbeatAt = millis() - HEARTBEAT_INTERVAL_MS;
+  lastSensorAt = millis() - SENSOR_SAMPLE_INTERVAL_MS;
+  lastCapturePollAt = millis();
+
+  for (;;) {
+    unsigned long now = millis();
+
+    if (!rfidRequestPending && now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
+      lastHeartbeatAt = now;
+      sendHeartbeat();
+    }
+    if (!rfidRequestPending && now - lastSensorAt >= SENSOR_SAMPLE_INTERVAL_MS) {
+      lastSensorAt = now;
+      sampleAndReportSlots();
+    }
+    if (!rfidRequestPending && now - lastCapturePollAt >= CAPTURE_POLL_INTERVAL_MS) {
+      lastCapturePollAt = now;
+      pollRfidCapture();
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
 
@@ -262,7 +348,7 @@ void submitRfidCapture(const String& uid) {
   doc["card_uid"] = uid;
   String payload, response;
   serializeJson(doc, payload);
-  int code = requestJson("/api/rfid/capture/result", payload, true, response);
+  int code = requestJson("/api/rfid/capture/result", payload, true, response, true);
   Serial.printf("[RFID CAPTURE] HTTP %d %s\n", code, response.c_str());
   if (code == 200) {
     activeCaptureRequestId = -1;
@@ -327,6 +413,7 @@ void checkRfid() {
   lastRfidAt = millis();
 
   Serial.println("[RFID DEBUG] Card communication completed");
+  rfidRequestPending = true;
 
   if (activeCaptureRequestId > 0) {
     Serial.println("[RFID DEBUG] Sending card to registration endpoint");
@@ -336,6 +423,7 @@ void checkRfid() {
     handleGateScan(uid);
   }
 
+  rfidRequestPending = false;
   Serial.println("[RFID DEBUG] Scan cycle completed");
 }
 void handleGateScan(const String& uid) {
@@ -349,7 +437,7 @@ void handleGateScan(const String& uid) {
   serializeJson(doc, payload);
 
   // The combined route determines entry vs exit from this card's active session.
-  int code = requestJson("/api/parking/gate/scan", payload, true, response);
+  int code = requestJson("/api/parking/gate/scan", payload, true, response, true);
   String reason, vehicle, slot, action;
   bool responseAuthorized = parseAuthorized(response, reason, vehicle, slot, action);
   bool authorized = (code == 200) && responseAuthorized;
@@ -405,6 +493,12 @@ void setup() {
   lcd.clear(); lcd.setCursor(0, 0); lcd.print("PARK+ SYSTEM");
   lcd.setCursor(0, 1); lcd.print("Starting IR...");
 
+  networkMutex = xSemaphoreCreateMutex();
+  if (!networkMutex) {
+    Serial.println("[ERROR] Could not create network mutex");
+    while (true) delay(1000);
+  }
+
   SPI.begin(RFID_SCK_PIN, RFID_MISO_PIN, RFID_MOSI_PIN, RFID_SS_PIN);
   rfid.PCD_Init();
   delay(100);
@@ -421,37 +515,45 @@ void setup() {
     Serial.printf("\n[WIFI] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
     lcd.clear(); lcd.print("WiFi Connected");
     lcd.setCursor(0, 1); lcd.print(WiFi.localIP().toString());
-    sendHeartbeat();
   } else {
     Serial.println("\n[WIFI] Connection failed");
     lcd.clear(); lcd.print("WiFi unavailable");
     lcd.setCursor(0, 1); lcd.print("Check settings");
   }
-  lastHeartbeatAt = millis();
-  lastSensorAt = millis();
-  lastCapturePollAt = millis();
+
+  BaseType_t taskCreated = xTaskCreatePinnedToCore(
+    networkTask, "networkTask", 8192, nullptr, 1, nullptr, 0
+  );
+  if (taskCreated != pdPASS) {
+    Serial.println("[ERROR] Could not start network task");
+    while (true) delay(1000);
+  }
+
   delay(900);
   showReady();
   Serial.println("[SYSTEM] PARK+ IR ready");
 }
 
 void loop() {
+  serviceRfidRecovery();
   checkRfid();
 
-  unsigned long now = millis();
   maintainBarrier();
-
-  if (now - lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
-    lastHeartbeatAt = now;
-    sendHeartbeat();
-  }
-  if (now - lastSensorAt >= SENSOR_INTERVAL_MS) {
-    lastSensorAt = now;
-    readAndSendSlots();
-  }
-  if (now - lastCapturePollAt >= CAPTURE_POLL_INTERVAL_MS) {
-    lastCapturePollAt = now;
-    pollRfidCapture();
+  if (pendingSecurityAlertBeep) {
+    pendingSecurityAlertBeep = false;
+    beepWarning();
   }
 
+  static long displayedCaptureRequestId = -1;
+  long captureRequestId = activeCaptureRequestId;
+  if (captureRequestId != displayedCaptureRequestId) {
+    displayedCaptureRequestId = captureRequestId;
+    if (captureRequestId > 0) {
+      lcd.clear();
+      lcd.setCursor(0, 0); lcd.print("ADMIN TAG CAPTURE");
+      lcd.setCursor(0, 1); lcd.print("Present RFID Tag");
+    } else {
+      showReady();
+    }
+  }
 }
